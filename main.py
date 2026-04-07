@@ -22,7 +22,7 @@ def build_parser():
     parser.add_argument(
         "--total-steps",
         type=int,
-        default=10,
+        default=10000,
         help="Training steps for TD-MPC commands (default: 10 for quick runs).",
     )
     parser.add_argument(
