@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -31,6 +33,7 @@ class S5Layer(nn.Module):
 
         log_dt = torch.rand(state_dim) * (np.log(dt_max) - np.log(dt_min)) + np.log(dt_min)
         self.log_dt = nn.Parameter(log_dt)
+        self._scan_warning_emitted = False
 
     @property
     def a(self) -> torch.Tensor:
@@ -45,8 +48,13 @@ class S5Layer(nn.Module):
     def b_bar(self) -> torch.Tensor:
         dt = torch.exp(self.log_dt)
         a = self.a
-        abar = self.a_bar
-        return ((abar - 1.0) / a).unsqueeze(1) * self.b * dt.unsqueeze(1)
+        x = dt * a
+        ratio = torch.where(
+            x.abs() < 1e-6,
+            dt,
+            torch.expm1(x) / a,
+        )
+        return ratio.unsqueeze(1) * self.b
 
     def step(self, z_prev: torch.Tensor, u_t: torch.Tensor) -> torch.Tensor:
         return self.a_bar.unsqueeze(0) * z_prev + (u_t @ self.b_bar.T)
@@ -61,10 +69,15 @@ class S5Layer(nn.Module):
         return torch.stack(outputs, dim=0)
 
     def forward_parallel_scan(self, inputs: torch.Tensor, z0: torch.Tensor | None = None) -> torch.Tensor:
-        # Functional fallback (sequential recurrence); interface leaves room for optimized scan kernels.
+        if not self._scan_warning_emitted:
+            warnings.warn(
+                "S5Layer.forward_parallel_scan currently falls back to the sequential implementation.",
+                stacklevel=2,
+            )
+            self._scan_warning_emitted = True
         return self.forward_sequential(inputs, z0)
 
     def forward(self, inputs: torch.Tensor, z0: torch.Tensor | None = None, use_scan: bool = True) -> torch.Tensor:
-        if use_scan and self.training:
+        if use_scan:
             return self.forward_parallel_scan(inputs, z0)
         return self.forward_sequential(inputs, z0)
