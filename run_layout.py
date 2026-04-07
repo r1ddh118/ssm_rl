@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
+from datetime import datetime, timezone
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,8 @@ def init_run_paths(run_name: str) -> RunPaths:
 
     for path in (log_dir, artifact_dir):
         if path.exists():
-            shutil.rmtree(path)
+            backup_name = f"{path.name}_backup_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+            path.rename(path.with_name(backup_name))
 
     for path in (log_dir, best_dir, eval_dir, artifact_dir):
         path.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from planning.sim_norm import SimNorm
+from sim_norm import SimNorm
 from ssm.s5_layer import S5Layer
 
 
@@ -39,17 +39,22 @@ class SSMDynamics(nn.Module):
 
         self.out_proj = nn.Linear(state_dim, latent_dim)
         self.dropout = nn.Dropout(p=0.1)
-        self.sim_norm = SimNorm(simnorm_dim) if simnorm_dim is not None else nn.Identity()
+        self.sim_norm = SimNorm(simnorm_dim, feature_dim=latent_dim) if simnorm_dim is not None else nn.Identity()
         self._hidden: torch.Tensor | None = None
 
     def reset_hidden(self, batch_size: int, device: torch.device | str) -> None:
         self._hidden = torch.zeros(batch_size, self.state_dim, device=device)
 
     def forward(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        if self._hidden is None or self._hidden.shape[0] != z.shape[0]:
+        if self._hidden is None:
             self.reset_hidden(batch_size=z.shape[0], device=z.device)
+        elif self._hidden.shape[0] != z.shape[0]:
+            raise ValueError(
+                f"Hidden batch size mismatch: hidden={self._hidden.shape[0]} input={z.shape[0]}. "
+                "Call reset_hidden(...) before forward when batch size changes."
+            )
 
         u = torch.cat([z, action], dim=-1)
         h_next = self.ssm.step(self._hidden, u)
-        self._hidden = h_next.detach()
-        return self.sim_norm(self.out_proj(self.dropout(h_next)))
+        self._hidden = h_next
+        return self.sim_norm(self.dropout(self.out_proj(h_next)))

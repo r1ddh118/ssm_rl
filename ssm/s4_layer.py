@@ -12,17 +12,14 @@ class S4Layer(nn.Module):
         self.state_dim = state_dim
         self.input_dim = input_dim
 
-        a_real = -0.5 * torch.ones(state_dim)
-        a_imag = torch.pi * torch.arange(state_dim, dtype=torch.float32)
-        self.a_complex = nn.Parameter(torch.stack([a_real, a_imag], dim=-1))
+        self.log_neg_a = nn.Parameter(torch.full((state_dim,), -0.5))
         self.b = nn.Parameter(torch.randn(state_dim, input_dim) * 0.01)
         self.log_dt = nn.Parameter(torch.log(torch.full((state_dim,), dt)))
 
     @property
     def a_real(self) -> torch.Tensor:
-        # Keep recurrence stable in real projection.
-        real_part = torch.clamp(self.a_complex[:, 0], min=-8.0, max=4.0)
-        return -torch.exp(real_part)
+        log_neg_a = torch.clamp(self.log_neg_a, min=-8.0, max=4.0)
+        return -torch.exp(log_neg_a)
 
     @property
     def a_bar(self) -> torch.Tensor:
@@ -33,9 +30,13 @@ class S4Layer(nn.Module):
     def b_bar(self) -> torch.Tensor:
         dt = torch.exp(torch.clamp(self.log_dt, min=-8.0, max=1.0))
         a = self.a_real
-        abar = self.a_bar
-        safe_a = torch.where(a.abs() < 1e-6, torch.full_like(a, -1e-6), a)
-        return ((abar - 1.0) / safe_a).unsqueeze(1) * self.b * dt.unsqueeze(1)
+        x = dt * a
+        ratio = torch.where(
+            x.abs() < 1e-6,
+            dt,
+            torch.expm1(x) / a,
+        )
+        return ratio.unsqueeze(1) * self.b
 
     def step(self, z_prev: torch.Tensor, u_t: torch.Tensor) -> torch.Tensor:
         return self.a_bar.unsqueeze(0) * z_prev + (u_t @ self.b_bar.T)

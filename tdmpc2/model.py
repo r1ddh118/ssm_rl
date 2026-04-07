@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from planning.sim_norm import SimNorm
+from sim_norm import SimNorm
 from ssm.ssm_world_model import SSMDynamics
 
 
@@ -23,7 +23,7 @@ class Encoder(nn.Module):
     def __init__(self, obs_dim: int, latent_dim: int = 64, simnorm_dim: int | None = None):
         super().__init__()
         self.net = _mlp(obs_dim, 256, latent_dim)
-        self.sim_norm = SimNorm(simnorm_dim) if simnorm_dim is not None else nn.Identity()
+        self.sim_norm = SimNorm(simnorm_dim, feature_dim=latent_dim) if simnorm_dim is not None else nn.Identity()
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         return self.sim_norm(self.net(obs))
