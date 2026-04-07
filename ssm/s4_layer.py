@@ -21,19 +21,21 @@ class S4Layer(nn.Module):
     @property
     def a_real(self) -> torch.Tensor:
         # Keep recurrence stable in real projection.
-        return -torch.exp(self.a_complex[:, 0])
+        real_part = torch.clamp(self.a_complex[:, 0], min=-8.0, max=4.0)
+        return -torch.exp(real_part)
 
     @property
     def a_bar(self) -> torch.Tensor:
-        dt = torch.exp(self.log_dt)
+        dt = torch.exp(torch.clamp(self.log_dt, min=-8.0, max=1.0))
         return torch.exp(dt * self.a_real)
 
     @property
     def b_bar(self) -> torch.Tensor:
-        dt = torch.exp(self.log_dt)
+        dt = torch.exp(torch.clamp(self.log_dt, min=-8.0, max=1.0))
         a = self.a_real
         abar = self.a_bar
-        return ((abar - 1.0) / a).unsqueeze(1) * self.b * dt.unsqueeze(1)
+        safe_a = torch.where(a.abs() < 1e-6, torch.full_like(a, -1e-6), a)
+        return ((abar - 1.0) / safe_a).unsqueeze(1) * self.b * dt.unsqueeze(1)
 
     def step(self, z_prev: torch.Tensor, u_t: torch.Tensor) -> torch.Tensor:
         return self.a_bar.unsqueeze(0) * z_prev + (u_t @ self.b_bar.T)

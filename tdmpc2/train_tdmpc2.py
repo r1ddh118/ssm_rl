@@ -78,7 +78,23 @@ def main(
 
     obs_dim = int(env.observation_space.shape[0])
     action_dim = int(env.action_space.shape[0])
-    config = TDMPC2TrainerConfig(total_steps=total_steps)
+    config_kwargs = {"total_steps": total_steps}
+    if total_steps <= 1_000:
+        config_kwargs.update(
+            batch_size=32,
+            seed_steps=min(100, total_steps),
+            eval_every_steps=max(1, total_steps),
+            log_every_steps=max(1, total_steps),
+            rollout_error_every_steps=max(1, total_steps),
+            n_eval_episodes=1,
+        )
+    if dynamics_type in {"s4", "s5", "mamba"}:
+        config_kwargs.update(
+            batch_size=min(config_kwargs.get("batch_size", 256), 128),
+            plan_samples=128,
+            target_plan_samples=32,
+        )
+    config = TDMPC2TrainerConfig(**config_kwargs)
     model = TDMPC2Model(
         obs_dim=obs_dim,
         action_dim=action_dim,
