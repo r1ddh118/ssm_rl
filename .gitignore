@@ -1,0 +1,4 @@
+artifacts/
+.sixth
+__pycache__
+logs/

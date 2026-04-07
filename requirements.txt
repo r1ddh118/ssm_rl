@@ -1,0 +1,30 @@
+# Core physics & control
+mujoco>=3.6.0
+dm-env>=1.6
+dm-tree>=0.1.10
+glfw>=2.10.0
+lxml>=6.0.0
+PyOpenGL>=3.1.10
+requests>=2.33.0
+scipy>=1.17.0
+shimmy>=2.0.0
+
+# Reinforcement learning
+stable-baselines3[extra]>=2.8.0
+gymnasium>=1.2.3
+
+# Machine learning
+# Install the correct PyTorch wheel for your platform:
+# - macOS Apple Silicon: default PyPI wheels are fine
+# - Linux + NVIDIA CUDA: use the PyTorch CUDA index URL from the README
+torch>=2.2.0
+torchvision>=0.17.0
+torchaudio>=2.2.0
+
+# Utilities
+numpy>=1.26.0
+matplotlib>=3.10.0
+tensorboard>=2.20.0
+opencv-python>=4.13.0.92
+pandas>=2.2.0
+seaborn>=0.13.0
