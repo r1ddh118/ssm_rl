@@ -318,7 +318,7 @@ def plot_all_phases() -> None:
         _plot_single_case(run_name, run_name, base_dir / "all_cases")
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Plot RL training results.")
     parser.add_argument(
         "--phase3",
@@ -330,7 +330,7 @@ def main():
         action="store_true",
         help="Generate plots for Phase 0/1/2/3 and all common run cases under artifacts/plots.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.all_phases:
         plot_all_phases()

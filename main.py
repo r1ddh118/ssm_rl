@@ -15,6 +15,7 @@ def build_parser():
             "tdmpc-mamba",
             "phase3",
             "plot",
+            "all-phases",
         ],
         help="Action to run.",
     )
@@ -29,6 +30,16 @@ def build_parser():
         type=float,
         default=0.0,
         help="Optional wall-clock cap for TD-MPC commands (0 disables time limit).",
+    )
+    parser.add_argument(
+        "--phase3",
+        action="store_true",
+        help="For plotting commands: plot only the Phase 3 horizon ablation.",
+    )
+    parser.add_argument(
+        "--all-phases",
+        action="store_true",
+        help="For plotting commands: generate all phase plots.",
     )
     return parser
 
@@ -92,7 +103,16 @@ def main():
     elif args.command == "plot":
         from plot_results import main as plot_main
 
-        plot_main()
+        plot_args = []
+        if args.all_phases:
+            plot_args.append("--all-phases")
+        elif args.phase3:
+            plot_args.append("--phase3")
+        plot_main(plot_args)
+    elif args.command == "all-phases":
+        from plot_results import main as plot_main
+
+        plot_main(["--all-phases"])
 
 
 if __name__ == "__main__":
