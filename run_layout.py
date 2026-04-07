@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,10 @@ def init_run_paths(run_name: str) -> RunPaths:
     artifact_dir = Path("artifacts") / run_name
     best_dir = log_dir / "best"
     eval_dir = log_dir / "eval"
+
+    for path in (log_dir, artifact_dir):
+        if path.exists():
+            shutil.rmtree(path)
 
     for path in (log_dir, best_dir, eval_dir, artifact_dir):
         path.mkdir(parents=True, exist_ok=True)

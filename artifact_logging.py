@@ -37,7 +37,7 @@ class JsonLinesMetricCallback(BaseCallback):
 
     def _on_training_start(self) -> None:
         os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
-        self._handle = open(self.output_path, "a", encoding="utf-8")
+        self._handle = open(self.output_path, "w", encoding="utf-8")
 
     def _on_step(self) -> bool:
         if (self.num_timesteps - self._last_logged_step) < self.log_every_steps:
