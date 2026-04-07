@@ -54,6 +54,36 @@ def build_parser() -> argparse.ArgumentParser:
         default=256,
         help="State dimension for SSM dynamics variants.",
     )
+    parser.add_argument("--plan-horizon", type=int, default=5, help="MPPI planning horizon.")
+    parser.add_argument("--plan-samples", type=int, default=512, help="MPPI sample count.")
+    parser.add_argument("--plan-temperature", type=float, default=0.5, help="MPPI temperature.")
+    parser.add_argument("--use-sam", action="store_true", help="Enable SAM optimizer.")
+    parser.add_argument("--sam-rho", type=float, default=0.05, help="SAM perturbation radius.")
+    parser.add_argument(
+        "--simnorm-dim",
+        type=int,
+        default=8,
+        help="SimNorm group size (set <=0 to disable).",
+    )
+    parser.add_argument("--use-info-prop", action="store_true", help="Enable InfoProp planning.")
+    parser.add_argument(
+        "--info-prop-threshold",
+        type=float,
+        default=0.1,
+        help="InfoProp uncertainty threshold.",
+    )
+    parser.add_argument(
+        "--info-prop-ensemble-k",
+        type=int,
+        default=5,
+        help="InfoProp MC-dropout samples.",
+    )
+    parser.add_argument(
+        "--max-wall-clock-seconds",
+        type=float,
+        default=0.0,
+        help="Optional wall-clock budget for training (0 disables time limit).",
+    )
     return parser
 
 
@@ -64,6 +94,16 @@ def main(
     total_steps: int = 10_000,
     dynamics_type: str = "mlp",
     ssm_state_dim: int = 256,
+    plan_horizon: int = 5,
+    plan_samples: int = 512,
+    plan_temperature: float = 0.5,
+    use_sam: bool = False,
+    sam_rho: float = 0.05,
+    simnorm_dim: int = 8,
+    use_info_prop: bool = False,
+    info_prop_threshold: float = 0.1,
+    info_prop_ensemble_k: int = 5,
+    max_wall_clock_seconds: float = 0.0,
 ) -> None:
     default_task, default_run_name = TASK_DEFAULTS[env_name]
     task = task or default_task
@@ -78,7 +118,20 @@ def main(
 
     obs_dim = int(env.observation_space.shape[0])
     action_dim = int(env.action_space.shape[0])
-    config_kwargs = {"total_steps": total_steps}
+    config_kwargs = {
+        "total_steps": total_steps,
+        "plan_horizon": plan_horizon,
+        "plan_samples": plan_samples,
+        "plan_temperature": plan_temperature,
+        "use_sam": use_sam,
+        "sam_rho": sam_rho,
+        "use_info_prop": use_info_prop,
+        "info_prop_threshold": info_prop_threshold,
+        "info_prop_ensemble_k": info_prop_ensemble_k,
+        "max_wall_clock_seconds": (
+            max_wall_clock_seconds if max_wall_clock_seconds > 0 else None
+        ),
+    }
     if total_steps <= 1_000:
         config_kwargs.update(
             batch_size=32,
@@ -91,7 +144,7 @@ def main(
     if dynamics_type in {"s4", "s5", "mamba"}:
         config_kwargs.update(
             batch_size=min(config_kwargs.get("batch_size", 256), 128),
-            plan_samples=128,
+            plan_samples=min(plan_samples, 128),
             target_plan_samples=32,
         )
     config = TDMPC2TrainerConfig(**config_kwargs)
@@ -101,6 +154,7 @@ def main(
         latent_dim=config.latent_dim,
         dynamics_type=dynamics_type,
         ssm_state_dim=ssm_state_dim,
+        simnorm_dim=simnorm_dim if simnorm_dim > 0 else None,
     )
 
     trainer = TDMPC2Trainer(
@@ -130,4 +184,14 @@ if __name__ == "__main__":
         total_steps=args.total_steps,
         dynamics_type=args.dynamics_type,
         ssm_state_dim=args.ssm_state_dim,
+        plan_horizon=args.plan_horizon,
+        plan_samples=args.plan_samples,
+        plan_temperature=args.plan_temperature,
+        use_sam=args.use_sam,
+        sam_rho=args.sam_rho,
+        simnorm_dim=args.simnorm_dim,
+        use_info_prop=args.use_info_prop,
+        info_prop_threshold=args.info_prop_threshold,
+        info_prop_ensemble_k=args.info_prop_ensemble_k,
+        max_wall_clock_seconds=args.max_wall_clock_seconds,
     )

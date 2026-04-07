@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from planning.sim_norm import SimNorm
 from ssm.ssm_world_model import SSMDynamics
 
 
@@ -19,12 +20,13 @@ def _mlp(input_dim: int, hidden_dim: int, output_dim: int) -> nn.Sequential:
 class Encoder(nn.Module):
     """Maps raw observations to a latent vector."""
 
-    def __init__(self, obs_dim: int, latent_dim: int = 64):
+    def __init__(self, obs_dim: int, latent_dim: int = 64, simnorm_dim: int | None = None):
         super().__init__()
         self.net = _mlp(obs_dim, 256, latent_dim)
+        self.sim_norm = SimNorm(simnorm_dim) if simnorm_dim is not None else nn.Identity()
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.net(obs)
+        return self.sim_norm(self.net(obs))
 
 
 class MLPDynamics(nn.Module):
@@ -85,6 +87,7 @@ class TDMPC2Model(nn.Module):
         latent_dim: int = 64,
         dynamics_type: str = "mlp",
         ssm_state_dim: int = 256,
+        simnorm_dim: int | None = None,
     ):
         super().__init__()
         self.obs_dim = obs_dim
@@ -92,7 +95,7 @@ class TDMPC2Model(nn.Module):
         self.latent_dim = latent_dim
         self.dynamics_type = dynamics_type
 
-        self.encoder = Encoder(obs_dim, latent_dim)
+        self.encoder = Encoder(obs_dim, latent_dim, simnorm_dim=simnorm_dim)
         if dynamics_type == "mlp":
             self.dynamics = MLPDynamics(latent_dim, action_dim)
         else:
@@ -101,6 +104,7 @@ class TDMPC2Model(nn.Module):
                 action_dim=action_dim,
                 variant=dynamics_type,
                 state_dim=ssm_state_dim,
+                simnorm_dim=simnorm_dim,
             )
         self.reward = RewardHead(latent_dim, action_dim)
         self.value = ValueHead(latent_dim, action_dim)

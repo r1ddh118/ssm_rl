@@ -1,3 +1,4 @@
+import argparse
 import glob
 import json
 import os
@@ -55,9 +56,12 @@ def load_tdmpc2_metrics(path):
     with open(path, "r", encoding="utf-8") as handle:
         for line in handle:
             record = json.loads(line)
-            if "eval_reward_mean" in record:
-                timesteps.append(int(record["step"]))
-                rewards.append(float(record["eval_reward_mean"]))
+            step = record.get("timesteps", record.get("step"))
+            metrics = record.get("metrics", {})
+            reward = metrics.get("eval/mean_reward", record.get("eval_reward_mean"))
+            if step is not None and reward is not None:
+                timesteps.append(int(step))
+                rewards.append(float(reward))
 
     if not timesteps:
         raise ValueError(f"No eval_reward_mean entries found in {path}")
@@ -94,7 +98,76 @@ def _find_tdmpc_variant_path(variant: str) -> tuple[str, str] | None:
     return None
 
 
-def main():
+def _load_tdmpc_run(run_name: str) -> tuple[np.ndarray, np.ndarray] | None:
+    npz_path = Path(f"./logs/{run_name}/eval/evaluations.npz")
+    metrics_path = Path(f"./artifacts/{run_name}/metrics.jsonl")
+    if npz_path.exists():
+        return load_tdmpc2(str(npz_path))
+    if metrics_path.exists():
+        return load_tdmpc2_metrics(str(metrics_path))
+    return None
+
+
+def _save_plot(fig, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    print(f"Saved: {output_path}")
+
+
+def _plot_single_case(run_name: str, label: str, output_dir: Path) -> bool:
+    values = _load_tdmpc_run(run_name)
+    if values is None:
+        return False
+    t, r = values
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+    marker = "o" if len(t) == 1 else None
+    ax.plot(t, r, linewidth=2.0, marker=marker)
+    ax.set_title(label)
+    ax.set_xlabel("Timesteps")
+    ax.set_ylabel("Mean Reward")
+    ax.grid(True, alpha=0.3)
+    _save_plot(fig, output_dir / f"{run_name}.png")
+    plt.close(fig)
+    return True
+
+
+def plot_phase3_horizon_ablation(output_dir: Path | None = None) -> None:
+    output_dir = output_dir or Path("./artifacts/plots/phase3")
+    runs = [
+        ("tdmpc2_walker_mlp_h5", "MLP H=5", "tab:green"),
+        ("tdmpc2_walker_mlp_h10", "MLP H=10", "tab:olive"),
+        ("tdmpc2_walker_s5_h5", "S5 H=5", "tab:red"),
+        ("tdmpc2_walker_s5_h10", "S5 H=10", "tab:purple"),
+    ]
+
+    plotted = []
+    for run_name, label, color in runs:
+        values = _load_tdmpc_run(run_name)
+        if values is None:
+            continue
+        plotted.append((label, color, *values))
+
+    if not plotted:
+        raise FileNotFoundError(
+            "No Phase 3 runs found. Expected run names: "
+            "tdmpc2_walker_mlp_h5, tdmpc2_walker_mlp_h10, tdmpc2_walker_s5_h5, tdmpc2_walker_s5_h10."
+        )
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+    for label, color, t, r in plotted:
+        marker = "o" if len(t) == 1 else None
+        ax.plot(t, r, label=label, color=color, linewidth=2.0, marker=marker)
+    ax.set_title("Phase 3 Planning Stability: Horizon Ablation (Walker-Walk)")
+    ax.set_xlabel("Timesteps")
+    ax.set_ylabel("Mean Reward")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    _save_plot(fig, output_dir / "phase3_horizon_ablation.png")
+    plt.close(fig)
+
+
+def plot_overview():
     ppo_path = first_existing_path(
         "./logs/ppo_walker/eval/evaluations.npz",
         "./logs/ppo_walker_mac/eval/evaluations.npz",
@@ -156,12 +229,116 @@ def main():
 
     axes[0].set_ylabel("Mean Reward")
 
-    output_path = Path("./logs/all_results.png")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150)
-    plt.show()
-    print(f"Saved to {output_path}")
+    output_path = Path("./artifacts/plots/overview/all_results.png")
+    _save_plot(fig, output_path)
+    plt.close(fig)
+
+
+def plot_phase0_baselines(output_dir: Path) -> None:
+    ppo_path = first_existing_path(
+        "./logs/ppo_walker/eval/evaluations.npz",
+        "./logs/ppo_walker_mac/eval/evaluations.npz",
+        "./logs/ppo_walker_us/eval/evaluations.npz",
+    )
+    sac_path = first_existing_path(
+        "./logs/sac_cheetah/eval/evaluations.npz",
+        "./logs/sac_cheetah_mac/eval/evaluations.npz",
+        "./logs/sac_cheetah_us/eval/evaluations.npz",
+    )
+    entries = []
+    if ppo_path:
+        entries.append(("PPO Walker", *load_sb3(ppo_path)))
+    if sac_path:
+        entries.append(("SAC Cheetah", *load_sb3(sac_path)))
+    if not entries:
+        return
+    fig, ax = plt.subplots(1, 1, figsize=(7, 4))
+    for label, t, r in entries:
+        ax.plot(t, r, linewidth=2.0, label=label, marker="o" if len(t) == 1 else None)
+    ax.set_title("Phase 0 Baselines")
+    ax.set_xlabel("Timesteps")
+    ax.set_ylabel("Mean Reward")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    _save_plot(fig, output_dir / "phase0_baselines.png")
+    plt.close(fig)
+
+
+def plot_phase1_mlp(output_dir: Path) -> None:
+    _plot_single_case("tdmpc2_walker_mlp", "Phase 1 - TD-MPC2 MLP (Walker)", output_dir)
+
+
+def plot_phase2_ssm(output_dir: Path) -> None:
+    runs = [
+        ("tdmpc2_walker_mlp", "MLP", "tab:green"),
+        ("tdmpc2_walker_s4", "S4", "tab:blue"),
+        ("tdmpc2_walker_s5", "S5", "tab:red"),
+        ("tdmpc2_walker_mamba", "Mamba", "tab:purple"),
+    ]
+    plotted = []
+    for run_name, label, color in runs:
+        values = _load_tdmpc_run(run_name)
+        if values is not None:
+            plotted.append((label, color, *values))
+    if not plotted:
+        return
+    fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+    for label, color, t, r in plotted:
+        ax.plot(t, r, linewidth=2.0, color=color, label=label, marker="o" if len(t) == 1 else None)
+    ax.set_title("Phase 2 Dynamics Comparison")
+    ax.set_xlabel("Timesteps")
+    ax.set_ylabel("Mean Reward")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    _save_plot(fig, output_dir / "phase2_dynamics_comparison.png")
+    plt.close(fig)
+
+
+def plot_all_phases() -> None:
+    base_dir = Path("./artifacts/plots")
+    plot_overview()
+    plot_phase0_baselines(base_dir / "phase0")
+    plot_phase1_mlp(base_dir / "phase1")
+    plot_phase2_ssm(base_dir / "phase2")
+    try:
+        plot_phase3_horizon_ablation(base_dir / "phase3")
+    except FileNotFoundError:
+        pass
+    # Save individual plots for all common Phase 1-3 run names if available.
+    for run_name in [
+        "tdmpc2_walker_mlp",
+        "tdmpc2_walker_s4",
+        "tdmpc2_walker_s5",
+        "tdmpc2_walker_mamba",
+        "tdmpc2_walker_mlp_h5",
+        "tdmpc2_walker_mlp_h10",
+        "tdmpc2_walker_s5_h5",
+        "tdmpc2_walker_s5_h10",
+    ]:
+        _plot_single_case(run_name, run_name, base_dir / "all_cases")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Plot RL training results.")
+    parser.add_argument(
+        "--phase3",
+        action="store_true",
+        help="Plot only the Phase 3 horizon ablation (H=5 vs H=10, MLP vs S5).",
+    )
+    parser.add_argument(
+        "--all-phases",
+        action="store_true",
+        help="Generate plots for Phase 0/1/2/3 and all common run cases under artifacts/plots.",
+    )
+    args = parser.parse_args()
+
+    if args.all_phases:
+        plot_all_phases()
+        return
+    if args.phase3:
+        plot_phase3_horizon_ablation()
+        return
+    plot_overview()
 
 
 if __name__ == "__main__":
