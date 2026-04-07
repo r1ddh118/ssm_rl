@@ -5,7 +5,7 @@ def build_parser():
     parser = argparse.ArgumentParser(description="Unified entry point for RL tasks.")
     parser.add_argument(
         "command",
-        choices=["test", "ppo", "sac", "tdmpc", "plot"],
+        choices=["test", "ppo", "sac", "tdmpc", "tdmpc-s4", "tdmpc-s5", "tdmpc-mamba", "plot"],
         help="Action to run.",
     )
     return parser
@@ -31,6 +31,18 @@ def main():
         from tdmpc2.train_tdmpc2 import main as train_tdmpc_main
 
         train_tdmpc_main()
+    elif args.command == "tdmpc-s4":
+        from train_tdmpc2_s4 import main as train_tdmpc_s4_main
+
+        train_tdmpc_s4_main()
+    elif args.command == "tdmpc-s5":
+        from train_tdmpc2_s5 import main as train_tdmpc_s5_main
+
+        train_tdmpc_s5_main()
+    elif args.command == "tdmpc-mamba":
+        from train_tdmpc2_mamba import main as train_tdmpc_mamba_main
+
+        train_tdmpc_mamba_main()
     elif args.command == "plot":
         from plot_results import main as plot_main
 

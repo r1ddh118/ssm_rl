@@ -3,6 +3,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from ssm.ssm_world_model import SSMDynamics
+
 
 def _mlp(input_dim: int, hidden_dim: int, output_dim: int) -> nn.Sequential:
     return nn.Sequential(
@@ -76,14 +78,30 @@ class ValueHead(nn.Module):
 class TDMPC2Model(nn.Module):
     """Container module for encoder, dynamics, reward, and value heads."""
 
-    def __init__(self, obs_dim: int, action_dim: int, latent_dim: int = 64):
+    def __init__(
+        self,
+        obs_dim: int,
+        action_dim: int,
+        latent_dim: int = 64,
+        dynamics_type: str = "mlp",
+        ssm_state_dim: int = 256,
+    ):
         super().__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.latent_dim = latent_dim
+        self.dynamics_type = dynamics_type
 
         self.encoder = Encoder(obs_dim, latent_dim)
-        self.dynamics = MLPDynamics(latent_dim, action_dim)
+        if dynamics_type == "mlp":
+            self.dynamics = MLPDynamics(latent_dim, action_dim)
+        else:
+            self.dynamics = SSMDynamics(
+                latent_dim=latent_dim,
+                action_dim=action_dim,
+                variant=dynamics_type,
+                state_dim=ssm_state_dim,
+            )
         self.reward = RewardHead(latent_dim, action_dim)
         self.value = ValueHead(latent_dim, action_dim)
 
@@ -106,6 +124,9 @@ class TDMPC2Model(nn.Module):
         latents = [z0]
         rewards = []
         z = z0
+
+        if hasattr(self.dynamics, "reset_hidden"):
+            self.dynamics.reset_hidden(batch_size=z0.shape[0], device=z0.device)
 
         for step in range(actions.shape[0]):
             action = actions[step]
