@@ -239,6 +239,12 @@ The training scripts print the selected runtime device automatically.
 
 ### Phase 3 runs (H=5 vs H=10 + stability tools)
 
+You can now launch the default Phase 3 S5 + stability configuration via `main.py`:
+
+```bash
+python main.py phase3 --total-steps 200000 --max-wall-clock-seconds 2700
+```
+
 Use the new wall-clock cap to prevent runaway jobs. Example: stop each run after 45 minutes:
 
 ```bash
