@@ -210,11 +210,29 @@ python main.py plot
 python main.py tdmpc
 ```
 
+`main.py tdmpc` now runs a **Stage 1 quick baseline** with `10,000` environment steps by default (instead of a long multi-hour run).  
+This is intended to finish much faster while keeping the same training pipeline and artifacts.
+
+Expected terminal output at startup:
+
+```text
+Selected device: cuda ...   # or mps/cpu depending on hardware
+Training output stored in artifacts/tdmpc2_walker_mlp/metrics.jsonl and artifacts/tdmpc2_walker_mlp/summary.json
+```
+
+During the run, metrics are logged every `1,000` steps, giving 10 log checkpoints up to 10,000.
+
 To train the same Phase 1 baseline on other domains directly:
 
 ```bash
 python -m tdmpc2.train_tdmpc2 --env-name cheetah
 python -m tdmpc2.train_tdmpc2 --env-name hopper
+```
+
+You can still override the default length, for example:
+
+```bash
+python -m tdmpc2.train_tdmpc2 --env-name walker --total-steps 50000
 ```
 
 The training scripts print the selected runtime device automatically.

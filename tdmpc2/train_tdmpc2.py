@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--total-steps",
         type=int,
-        default=200_000,
+        default=10_000,
         help="Number of environment steps to train for.",
     )
     return parser
@@ -49,7 +49,7 @@ def main(
     env_name: str = "walker",
     task: str | None = None,
     run_name: str | None = None,
-    total_steps: int = 200_000,
+    total_steps: int = 10_000,
 ) -> None:
     default_task, default_run_name = TASK_DEFAULTS[env_name]
     task = task or default_task
