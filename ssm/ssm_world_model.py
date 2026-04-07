@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from planning.sim_norm import SimNorm
 from ssm.s5_layer import S5Layer
 
 
@@ -15,6 +16,7 @@ class SSMDynamics(nn.Module):
         action_dim: int,
         variant: str = "s5",
         state_dim: int = 256,
+        simnorm_dim: int | None = None,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -36,6 +38,8 @@ class SSMDynamics(nn.Module):
             raise ValueError(f"Unknown SSM variant: {variant}")
 
         self.out_proj = nn.Linear(state_dim, latent_dim)
+        self.dropout = nn.Dropout(p=0.1)
+        self.sim_norm = SimNorm(simnorm_dim) if simnorm_dim is not None else nn.Identity()
         self._hidden: torch.Tensor | None = None
 
     def reset_hidden(self, batch_size: int, device: torch.device | str) -> None:
@@ -48,4 +52,4 @@ class SSMDynamics(nn.Module):
         u = torch.cat([z, action], dim=-1)
         h_next = self.ssm.step(self._hidden, u)
         self._hidden = h_next.detach()
-        return self.out_proj(h_next)
+        return self.sim_norm(self.out_proj(self.dropout(h_next)))

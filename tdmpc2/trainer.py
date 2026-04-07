@@ -10,6 +10,9 @@ import torch
 import torch.nn.functional as F
 
 from artifact_logging import utc_now_iso
+from planning.info_prop import InfoProp
+from planning.mppi import MPPI
+from planning.sam_optimizer import SAM
 from tdmpc2.replay_buffer import ReplayBuffer
 
 
@@ -36,6 +39,13 @@ class TDMPC2TrainerConfig:
     grad_clip_norm: float = 10.0
     rollout_error_horizon: int = 10
     rollout_error_every_steps: int = 10_000
+    use_sam: bool = False
+    sam_rho: float = 0.05
+    use_info_prop: bool = False
+    info_prop_threshold: float = 0.1
+    info_prop_ensemble_k: int = 5
+    info_prop_start_step: int = 50_000
+    max_wall_clock_seconds: float | None = None
 
 
 class TDMPC2Trainer:
@@ -63,10 +73,18 @@ class TDMPC2Trainer:
         self.target_model = copy.deepcopy(self.model).to(self.device)
         self.target_model.eval()
 
-        self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
-            lr=self.config.learning_rate,
-        )
+        if self.config.use_sam:
+            self.optimizer = SAM(
+                self.model.parameters(),
+                torch.optim.Adam,
+                lr=self.config.learning_rate,
+                rho=self.config.sam_rho,
+            )
+        else:
+            self.optimizer = torch.optim.Adam(
+                self.model.parameters(),
+                lr=self.config.learning_rate,
+            )
         self.replay_buffer = ReplayBuffer(capacity=self.config.buffer_size)
 
         action_space = self.env.action_space
@@ -81,8 +99,27 @@ class TDMPC2Trainer:
             dtype=torch.float32,
             device=self.device,
         )
-        self.action_mid = (self.action_high + self.action_low) / 2.0
-        self.action_scale = (self.action_high - self.action_low) / 2.0
+        self.info_prop = None
+        self.planner = MPPI(
+            world_model=self.model,
+            action_dim=self.action_dim,
+            horizon=self.config.plan_horizon,
+            n_samples=self.config.plan_samples,
+            temperature=self.config.plan_temperature,
+            gamma=self.config.gamma,
+            action_low=self.action_low,
+            action_high=self.action_high,
+        )
+        self.target_planner = MPPI(
+            world_model=self.model,
+            action_dim=self.action_dim,
+            horizon=self.config.target_plan_horizon,
+            n_samples=self.config.target_plan_samples,
+            temperature=self.config.plan_temperature,
+            gamma=self.config.gamma,
+            action_low=self.action_low,
+            action_high=self.action_high,
+        )
 
         self.started_at = utc_now_iso()
         self.wall_start = time.time()
@@ -91,6 +128,7 @@ class TDMPC2Trainer:
         self.eval_results: list[list[float]] = []
         self.best_eval_reward = float("-inf")
         self.update_step = 0
+        self.time_limit_reached = False
 
     def train(self) -> None:
         self.metrics_handle = open(self.paths.metrics_path, "a", encoding="utf-8")
@@ -102,6 +140,13 @@ class TDMPC2Trainer:
 
         try:
             for step in range(1, self.config.total_steps + 1):
+                if (
+                    self.config.max_wall_clock_seconds is not None
+                    and (time.time() - self.wall_start) >= self.config.max_wall_clock_seconds
+                ):
+                    self.time_limit_reached = True
+                    break
+
                 if step <= self.config.seed_steps:
                     action = self._sample_uniform_actions(1)[0]
                 else:
@@ -172,52 +217,17 @@ class TDMPC2Trainer:
             device=self.device,
         ).unsqueeze(0)
         latent = self.model.encoder(obs_tensor)
-        action = self.mppi_action(
-            latent,
-            horizon=self.config.plan_horizon,
-            n_samples=self.config.plan_samples,
-            temperature=self.config.plan_temperature,
-        )
+        if self.config.use_info_prop and self.update_step >= self.config.info_prop_start_step:
+            if self.info_prop is None:
+                self.info_prop = InfoProp(
+                    world_model=self.model,
+                    n_ensemble=self.config.info_prop_ensemble_k,
+                    uncertainty_threshold=self.config.info_prop_threshold,
+                    gamma=self.config.gamma,
+                )
+                self.planner.info_prop = self.info_prop
+        action = self.planner.plan(latent, self.device)
         return action.squeeze(0).cpu().numpy()
-
-    @torch.no_grad()
-    def mppi_action(
-        self,
-        latent: torch.Tensor,
-        horizon: int,
-        n_samples: int,
-        temperature: float,
-    ) -> torch.Tensor:
-        batch_size, latent_dim = latent.shape
-
-        noise = torch.randn(
-            horizon,
-            batch_size,
-            n_samples,
-            self.action_dim,
-            device=self.device,
-        )
-        sampled_actions = self.action_mid.view(1, 1, 1, -1) + torch.tanh(noise) * (
-            self.action_scale.view(1, 1, 1, -1)
-        )
-
-        rollout_actions = sampled_actions.reshape(
-            horizon,
-            batch_size * n_samples,
-            self.action_dim,
-        )
-        latent_batch = latent.unsqueeze(1).expand(-1, n_samples, -1).reshape(
-            batch_size * n_samples,
-            latent_dim,
-        )
-
-        _, rewards = self.model.rollout(latent_batch, rollout_actions)
-        total_rewards = rewards.sum(dim=0).reshape(batch_size, n_samples)
-        weights = torch.softmax(total_rewards / max(temperature, 1e-6), dim=-1)
-
-        first_actions = sampled_actions[0]
-        action = (weights.unsqueeze(-1) * first_actions).sum(dim=1)
-        return torch.max(torch.min(action, self.action_high), self.action_low)
 
     def update(self) -> dict[str, float]:
         obs_seq, act_seq, rew_seq, done_seq = self.replay_buffer.sample_sequences(
@@ -232,13 +242,7 @@ class TDMPC2Trainer:
 
         total_loss, metrics = self.compute_losses(obs_seq, act_seq, rew_seq, done_seq)
 
-        self.optimizer.zero_grad(set_to_none=True)
-        total_loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(),
-            max_norm=self.config.grad_clip_norm,
-        )
-        self.optimizer.step()
+        grad_norm = self._optimization_step(total_loss, obs_seq, act_seq, rew_seq, done_seq)
 
         self.update_step += 1
         if self.update_step % self.config.target_update_freq == 0:
@@ -275,12 +279,7 @@ class TDMPC2Trainer:
 
         with torch.no_grad():
             next_latents = target_latents.reshape(-1, self.model.latent_dim)
-            next_actions = self.mppi_action(
-                next_latents,
-                horizon=self.config.target_plan_horizon,
-                n_samples=self.config.target_plan_samples,
-                temperature=self.config.plan_temperature,
-            )
+            next_actions = self.target_planner.plan(next_latents, self.device)
             target_q1, target_q2 = self.target_model.value(next_latents, next_actions)
             target_q = torch.minimum(target_q1, target_q2)
             td_target = rew_seq.reshape(-1) + self.config.gamma * (
@@ -374,6 +373,39 @@ class TDMPC2Trainer:
         error = F.mse_loss(pred_latents[horizon], z_true)
         return {f"rollout_error/h{horizon}": float(error.item())}
 
+    def _optimization_step(
+        self,
+        total_loss: torch.Tensor,
+        obs_seq: torch.Tensor,
+        act_seq: torch.Tensor,
+        rew_seq: torch.Tensor,
+        done_seq: torch.Tensor,
+    ) -> torch.Tensor:
+        self.optimizer.zero_grad(set_to_none=True)
+        total_loss.backward()
+
+        if self.config.use_sam:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                max_norm=self.config.grad_clip_norm,
+            )
+            self.optimizer.first_step(zero_grad=True)
+            second_loss, _ = self.compute_losses(obs_seq, act_seq, rew_seq, done_seq)
+            second_loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                max_norm=self.config.grad_clip_norm,
+            )
+            self.optimizer.second_step(zero_grad=True)
+            return grad_norm
+
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(),
+            max_norm=self.config.grad_clip_norm,
+        )
+        self.optimizer.step()
+        return grad_norm
+
     def _step_env(self, env, action: np.ndarray) -> tuple[np.ndarray, float, bool]:
         next_obs, reward, done, _ = env.step(action[None, :])
         return next_obs[0], float(reward[0]), bool(done[0])
@@ -448,6 +480,7 @@ class TDMPC2Trainer:
             "recent_train_episode_return": (
                 float(np.mean(completed_returns[-10:])) if completed_returns else None
             ),
+            "time_limit_reached": self.time_limit_reached,
             "config": asdict(self.config),
             "artifacts": {
                 "metrics_jsonl": str(self.paths.metrics_path),
