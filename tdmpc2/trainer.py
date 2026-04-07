@@ -34,6 +34,8 @@ class TDMPC2TrainerConfig:
     target_plan_horizon: int = 3
     target_plan_samples: int = 128
     grad_clip_norm: float = 10.0
+    rollout_error_horizon: int = 10
+    rollout_error_every_steps: int = 10_000
 
 
 class TDMPC2Trainer:
@@ -134,6 +136,18 @@ class TDMPC2Trainer:
                 if step % self.config.eval_every_steps == 0:
                     eval_metrics = self.evaluate(step)
                     last_metrics = {**last_metrics, **eval_metrics}
+
+                if (
+                    step % self.config.rollout_error_every_steps == 0
+                    and self.replay_buffer.can_sample_sequence(
+                        self.config.batch_size,
+                        self.config.rollout_error_horizon,
+                    )
+                ):
+                    rollout_metric = self._compute_rollout_error_metric(
+                        horizon=self.config.rollout_error_horizon
+                    )
+                    last_metrics = {**last_metrics, **rollout_metric}
 
                 if step % self.config.log_every_steps == 0:
                     self._log_metrics(
@@ -345,6 +359,21 @@ class TDMPC2Trainer:
             error = F.mse_loss(pred_latents[-1], target_latent)
         return float(error.item())
 
+    @torch.no_grad()
+    def _compute_rollout_error_metric(self, horizon: int) -> dict[str, float]:
+        obs_seq, act_seq, _, _ = self.replay_buffer.sample_sequences(
+            batch_size=self.config.batch_size,
+            horizon=horizon,
+        )
+        obs_seq = torch.as_tensor(obs_seq, dtype=torch.float32, device=self.device)
+        act_seq = torch.as_tensor(act_seq, dtype=torch.float32, device=self.device)
+
+        z0 = self.model.encoder(obs_seq[0])
+        pred_latents, _ = self.model.rollout(z0, act_seq)
+        z_true = self.model.encoder(obs_seq[horizon].detach())
+        error = F.mse_loss(pred_latents[horizon], z_true)
+        return {f"rollout_error/h{horizon}": float(error.item())}
+
     def _step_env(self, env, action: np.ndarray) -> tuple[np.ndarray, float, bool]:
         next_obs, reward, done, _ = env.step(action[None, :])
         return next_obs[0], float(reward[0]), bool(done[0])
@@ -409,7 +438,7 @@ class TDMPC2Trainer:
     def _write_summary(self, completed_returns: list[float]) -> None:
         summary = {
             "run_name": self.run_name,
-            "algorithm": "TD-MPC2 (MLP dynamics)",
+            "algorithm": f"TD-MPC2 ({self.model.dynamics_type} dynamics)",
             "environment": self.environment_name,
             "device": str(self.device),
             "total_timesteps": self.config.total_steps,
